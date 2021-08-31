@@ -1,0 +1,117 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Template for deploying API
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+    - Label:
+        default: 'Server Details'
+      Parameters:
+      - SolutionStackName
+      - SSHKeyName
+      - InstanceType
+      - MinInstances
+      - MaxInstances
+      - LogRetentionPeriod
+Parameters:
+  SSHKeyName:
+    Description: 'The name of the SSH Key pair to use for remote login.'
+    Type: String
+    Default: ''
+  SolutionStackName:
+    Description: 'The name of the solution stack to base the environment on.'
+    Type: String
+    Default: '64bit Amazon Linux 2 v3.4.4 running Docker'
+    AllowedValues: ['64bit Amazon Linux 2 v3.4.4 running Docker']
+  InstanceType:
+    Description: 'The EC2 instance type of the application server.'
+    Type: String
+    Default: 'c5.large'
+    AllowedValues: ['c5.large', 'c5.xlarge', 'm5.large', 'm5.xlarge']
+  MinInstances:
+    Description: 'The minimum number of instances to run.'
+    Type: Number
+    Default: 1
+  MaxInstances:
+    Description: 'The maximum number of instances to run.'
+    Type: Number
+    Default: 1
+  LogRetentionPeriod:
+    Description: 'The period of time to retain log entries for.'
+    Type: Number
+    Default: 7
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365]
+
+Resources:
+  Application:
+    Type: AWS::ElasticBeanstalk::Application
+
+  InstanceProfileRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: 'Allow'
+              Principal:
+                Service:
+                  - 'ec2.amazonaws.com'
+              Action:
+                - 'sts:AssumeRole'
+        ManagedPolicyArns:
+          - 'arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier'
+          - 'arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly'
+          - 'arn:aws:iam::aws:policy/AWSElasticBeanstalkMulticontainerDocker'
+          - 'arn:aws:iam::aws:policy/AWSElasticBeanstalkWorkerTier'
+
+  InstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles:
+        - !Ref 'InstanceProfileRole'
+
+  Environment:
+    Type: AWS::ElasticBeanstalk::Environment
+    Properties:
+      ApplicationName: !Ref Application
+      SolutionStackName: !Ref SolutionStackName
+      Tier:
+        Name: WebServer
+        Type: Standard
+      OptionSettings:
+        - Namespace: 'aws:autoscaling:launchconfiguration'
+          OptionName: EC2KeyName
+          Value: !Ref SSHKeyName
+        - Namespace: 'aws:ec2:instances'
+          OptionName: InstanceTypes
+          Value: !Ref InstanceType
+        - Namespace: 'aws:autoscaling:asg'
+          OptionName: MinSize
+          Value: !Ref MinInstances
+        - Namespace: 'aws:autoscaling:asg'
+          OptionName: MaxSize
+          Value: !Ref MaxInstances
+        - Namespace: 'aws:elasticbeanstalk:cloudwatch:logs'
+          OptionName: StreamLogs
+          Value: 'true'
+        - Namespace: 'aws:elasticbeanstalk:cloudwatch:logs'
+          OptionName: RetentionInDays
+          Value: !Ref LogRetentionPeriod
+        - Namespace: 'aws:elasticbeanstalk:healthreporting:system'
+          OptionName: SystemType
+          Value: 'enhanced'
+        - Namespace: 'aws:elasticbeanstalk:environment'
+          OptionName: ServiceRole
+          Value: 'aws-elasticbeanstalk-service-role'
+        - Namespace: 'aws:autoscaling:launchconfiguration'
+          OptionName: IamInstanceProfile
+          Value: !Ref InstanceProfile
+
+Outputs:
+  StackName:
+    Description: 'Stack name.'
+    Value: !Sub '${AWS::StackName}'
+  EndpointUrl:
+    Description: 'The URL for the Elastic Beanstalk Endpoint'
+    Value: { 'Fn::Join' : [ '', [ 'http://', { 'Fn::GetAtt' : ['Environment', 'EndpointURL'] }]]}
+    Export:
+      Name: !Sub '${AWS::StackName}-EndpointUrl'

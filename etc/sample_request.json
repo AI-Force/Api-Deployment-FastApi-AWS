@@ -1,0 +1,18 @@
+{
+    "resource": "/v1/predict",
+    "path": "/v1/predict",
+    "httpMethod": "POST",
+    "requestContext": {
+        "resourcePath": "/v1/predict",
+        "httpMethod": "POST"
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "queryStringParameters": null,
+    "multiValueQueryStringParameters": null,
+    "pathParameters": null,
+    "stageVariables": null,
+    "body": "{\"images\":[{\"url\":\"https://localhost/test.jpg\"}]}",
+    "isBase64Encoded": false
+}

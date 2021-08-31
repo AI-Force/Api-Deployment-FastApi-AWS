@@ -1,0 +1,177 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: 'AWS::Serverless-2016-10-31'
+Description: 'Creates the AWS resources required to run the application.'
+Parameters:
+  StageName:
+    Description: 'The stage name used in the API Gateway'
+    Type: String
+    Default: 'api'
+  ImageUri:
+    Description: 'The path to the docker image to use.'
+    Type: String
+    Default: ''
+  MemorySize:
+    Description: 'The amount of memory to give to the lambda function.'
+    Type: Number
+    Default: 4096
+  ApiTimeout:
+    Description: 'The timeout for realtime API requests. This is limited by the API Gateway integration timeouts.'
+    Type: Number
+    Default: 29
+  ConcurrentExecutions:
+    Description: 'The number of concurrent executions allowed for the response handler.'
+    Type: Number
+    Default: 1
+Resources:
+  DefaultRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:DetachNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                Resource: '*'
+          PolicyName: DefaultRolePolicy
+
+  ApiHandler:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      MemorySize: !Ref MemorySize
+      Timeout: !Ref ApiTimeout
+      ReservedConcurrentExecutions: !Ref ConcurrentExecutions
+      Role: !GetAtt
+        - DefaultRole
+        - Arn
+
+  RestApi:
+    Type: 'AWS::Serverless::Api'
+    Properties:
+      StageName: !Ref StageName
+      DefinitionBody:
+        swagger: '2.0'
+        info:
+          version: '1.0'
+          title: RestApi
+        schemes:
+          - https
+        paths:
+          '/{proxy+}':
+            x-amazon-apigateway-any-method:
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              parameters:
+                - name: "proxy"
+                  in: "path"
+                  required: true
+                  type: "string"
+              responses:
+                '200':
+                  description: 200 response
+                  schema:
+                    $ref: '#/definitions/Empty'
+              x-amazon-apigateway-integration:
+                responses:
+                  default:
+                    statusCode: '200'
+                uri: !Sub >-
+                  arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiHandler.Arn}/invocations
+                requestParameters:
+                  integration.request.header.Accept-Encoding: "'identity'"
+                  integration.request.path.proxy: "method.request.path.proxy"
+                passthroughBehavior: when_no_match
+                httpMethod: 'ANY'
+                type: aws_proxy
+              summary: Please refer to the specification below.
+              description: ''
+            options:
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              responses:
+                '200':
+                  description: 200 response
+                  schema:
+                    $ref: '#/definitions/Empty'
+                  headers:
+                    Access-Control-Allow-Methods:
+                      type: string
+                    Access-Control-Allow-Origin:
+                      type: string
+                    Access-Control-Allow-Headers:
+                      type: string
+              x-amazon-apigateway-integration:
+                responses:
+                  default:
+                    statusCode: '200'
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Methods: '''POST,GET,PUT,OPTIONS'''
+                      method.response.header.Access-Control-Allow-Origin: '''*'''
+                      method.response.header.Access-Control-Allow-Headers: >-
+                        'Authorization,Content-Type,X-Amz-Date,X-Amz-Security-Token,X-Api-Key'
+                requestTemplates:
+                  application/json: '{"statusCode": 200}'
+                passthroughBehavior: when_no_match
+                type: mock
+        definitions:
+          Empty:
+            type: object
+            title: Empty Schema
+
+  ApiHandlerInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref ApiHandler
+      Action: 'lambda:InvokeFunction'
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestAPIId}/*'
+        - RestAPIId: !Ref RestApi
+
+Outputs:
+  StackName:
+    Description: 'Stack name.'
+    Value: !Sub '${AWS::StackName}'
+  ApiId:
+    Value: !Ref RestApi
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiId'
+  ApiHandlerName:
+    Value: !Ref ApiHandler
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiHandlerName'
+  ApiHandlerArn:
+    Value: !GetAtt
+      - ApiHandler
+      - Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiHandlerArn'
+  ApiEndpointUrl:
+    Description: 'The endpoint that clients to use to access the API.'
+    Value: !Sub 'https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpointUrl'
