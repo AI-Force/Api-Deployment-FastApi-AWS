@@ -11,7 +11,7 @@ Parameters:
   BranchName:
     Description: 'The name of the branch to deploy from.'
     Type: String
-    Default: 'master'
+    Default: 'main'
   ImageRepository:
     Description: 'The name of the ECR repository where images are stored.'
     Type: String
