@@ -1,0 +1,32 @@
+version: 0.2
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - aws --version
+      - ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - REPOSITORY_URI=$ECR_URL/$REPOSITORY_NAME
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_URL
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - BUILD_TAG=$(echo $CODEBUILD_BUILD_ID | awk -F":" '{print $2}')
+      - BUILD_LABEL=build-$BUILD_TAG
+  build:
+    commands:
+      - echo Build started on `date`
+      - echo Building the Docker image...
+      - docker build -f Dockerfile.lambda -t $REPOSITORY_URI:latest .
+      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$BUILD_LABEL
+      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$COMMIT_HASH
+      - printf '{"ImageUri":"%s"}' $REPOSITORY_URI:$BUILD_LABEL > image.json
+      - cp deploy/lambda.yaml deploy.yaml
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Pushing the Docker images...
+      - docker push $REPOSITORY_URI:latest
+      - docker push $REPOSITORY_URI:$BUILD_LABEL
+      - docker push $REPOSITORY_URI:$COMMIT_HASH
+artifacts:
+  files:
+    - image.json
+    - deploy.yaml

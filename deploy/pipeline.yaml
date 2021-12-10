@@ -1,0 +1,360 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  ApplicationName:
+    Default: SampleApi
+    Type: String
+    Description: Enter the name of your application
+  CodeBuildImage:
+    Default: 'aws/codebuild/standard:4.0'
+    Type: String
+    Description: Name of codebuild image to use.
+  BranchName:
+    Description: 'The name of the branch to deploy from.'
+    Type: String
+    Default: 'master'
+  ImageRepository:
+    Description: 'The name of the ECR repository where images are stored.'
+    Type: String
+    Default: 'test'
+
+Resources:
+
+  SourceRepository:
+    Type: 'AWS::CodeCommit::Repository'
+    Properties:
+      RepositoryName: !Ref ApplicationName
+      RepositoryDescription: !Sub 'Source code for ${ApplicationName}'
+
+  ApprovalTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties: {}
+
+  ApprovalTopicPolicy:
+    Type: 'AWS::SNS::TopicPolicy'
+    Properties:
+      PolicyDocument:
+        Id: Id1
+        Version: '2012-10-17'
+        Statement:
+        - Sid: Sid1
+          Effect: Allow
+          Principal:
+            Service:
+            - 'events.amazonaws.com'
+            - 'codepipeline.amazonaws.com'
+          Action: 'sns:Publish'
+          Resource: !Ref ApprovalTopic
+      Topics:
+      - !Ref ApprovalTopic
+
+
+  CodeBuildRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+
+  CodeBuildPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: CodeBuildPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource: '*'
+            Effect: Allow
+          - Action:
+              - 's3:GetObject'
+              - 's3:GetObjectVersion'
+              - 's3:PutObject'
+            Resource: 'arn:aws:s3:::*'
+            Effect: Allow
+          - Action:
+              - 'ecr:GetAuthorizationToken'
+              - 'ecr:GetDownloadUrlForLayer'
+              - 'ecr:BatchGetImage'
+              - 'ecr:BatchCheckLayerAvailability'
+              - 'ecr:PutImage'
+              - 'ecr:InitiateLayerUpload'
+              - 'ecr:UploadLayerPart'
+              - 'ecr:CompleteLayerUpload'
+            Resource: '*'
+            Effect: Allow
+      Roles:
+        - !Ref CodeBuildRole
+
+  AppPackageBuild:
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: !Ref CodeBuildImage
+        Type: LINUX_CONTAINER
+        PrivilegedMode: True
+        EnvironmentVariables:
+          - Name: REPOSITORY_NAME
+            Value: !Ref ImageRepository
+          - Name: AWS_DEFAULT_REGION
+            Value: !Sub '${AWS::Region}'
+          - Name: AWS_ACCOUNT_ID
+            Value: !Sub '${AWS::AccountId}'
+      Name: !Sub '${ApplicationName}Build'
+      ServiceRole: !GetAtt
+        - CodeBuildRole
+        - Arn
+      Source:
+        Type: CODEPIPELINE
+  
+  AppPipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    Properties:
+      Name: !Sub '${ApplicationName}Pipeline'
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucketStore
+      RoleArn: !GetAtt
+        - CodePipelineRole
+        - Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              Configuration:
+                BranchName: !Ref BranchName
+                RepositoryName: !GetAtt
+                  - SourceRepository
+                  - Name
+              OutputArtifacts:
+                - Name: SourceRepo
+              RunOrder: 1
+              Name: Source  
+        - Name: Build
+          Actions:
+            - InputArtifacts:
+                - Name: SourceRepo
+              Name: CodeBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: BuildArtefacts
+              Configuration:
+                ProjectName: !Ref AppPackageBuild                
+              RunOrder: 1
+        - Name: Development
+          Actions:
+            - ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: CloudFormation
+              InputArtifacts:
+                - Name: BuildArtefacts
+              Name: CreateDevelopmentChangeSet
+              Configuration:
+                ActionMode: CHANGE_SET_REPLACE
+                ChangeSetName: !Sub '${ApplicationName}DevelopmentChangeSet'
+                RoleArn: !GetAtt
+                  - CFNDeployRole
+                  - Arn
+                Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
+                StackName: !Sub '${ApplicationName}DevelopmentStack'
+                TemplatePath: 'BuildArtefacts::deploy.yaml'
+                ParameterOverrides: |
+                  {
+                    "ImageUri": {"Fn::GetParam": ["BuildArtefacts", "image.json", "ImageUri"]}
+                  }
+              RunOrder: 1
+            - RunOrder: 2
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: CloudFormation
+              Configuration:
+                StackName: !Sub '${ApplicationName}DevelopmentStack'
+                ActionMode: CHANGE_SET_EXECUTE
+                ChangeSetName: !Sub '${ApplicationName}DevelopmentChangeSet'
+                OutputFileName: StackOutputs.json
+              Name: ExecuteChangeSet
+              OutputArtifacts:
+                - Name: AppDeploymentValuesDevelopment
+        - Name: Production
+          Actions:
+            - ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: CloudFormation
+              InputArtifacts:
+                - Name: BuildArtefacts
+              Name: CreateProductionChangeSet
+              Configuration:
+                ActionMode: CHANGE_SET_REPLACE
+                ChangeSetName: !Sub '${ApplicationName}ProductionChangeSet'
+                RoleArn: !GetAtt
+                  - CFNDeployRole
+                  - Arn
+                Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
+                StackName: !Sub '${ApplicationName}ProductionStack'
+                TemplatePath: 'BuildArtefacts::deploy.yaml'
+                ParameterOverrides: |
+                  {
+                    "ImageUri": {"Fn::GetParam": ["BuildArtefacts", "image.json", "ImageUri"]}
+                  }
+              RunOrder: 1
+            - Name: DeploymentApproval
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Version: 1
+                Provider: Manual
+              Configuration:
+                NotificationArn: !Ref ApprovalTopic
+                CustomData: 'Please approve the change set to allow deployment.'
+              RunOrder: 2
+            - Name: ExecuteChangeSet
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: CloudFormation
+              Configuration:
+                StackName: !Sub '${ApplicationName}ProductionStack'
+                ActionMode: CHANGE_SET_EXECUTE
+                ChangeSetName: !Sub '${ApplicationName}ProductionChangeSet'
+                OutputFileName: StackOutputs.json
+              OutputArtifacts:
+                - Name: AppDeploymentValuesProduction
+              RunOrder: 3
+  ArtifactBucketStore:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+  CodePipelineRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Policies:
+        - PolicyName: DefaultPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketVersioning'
+                  - 's3:CreateBucket'
+                  - 's3:PutObject'
+                  - 's3:PutBucketVersioning'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - "sns:Publish"
+                Effect: "Allow"
+                Resource:
+                  - !Ref ApprovalTopic
+              - Action:
+                  - 'codecommit:CancelUploadArchive'
+                  - 'codecommit:GetBranch'
+                  - 'codecommit:GetCommit'
+                  - 'codecommit:GetUploadArchiveStatus'
+                  - 'codecommit:UploadArchive'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 'cloudwatch:*'
+                  - 'iam:PassRole'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 'lambda:InvokeFunction'
+                  - 'lambda:ListFunctions'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 'cloudformation:CreateStack'
+                  - 'cloudformation:DeleteStack'
+                  - 'cloudformation:DescribeStacks'
+                  - 'cloudformation:UpdateStack'
+                  - 'cloudformation:CreateChangeSet'
+                  - 'cloudformation:DeleteChangeSet'
+                  - 'cloudformation:DescribeChangeSet'
+                  - 'cloudformation:ExecuteChangeSet'
+                  - 'cloudformation:SetStackPolicy'
+                  - 'cloudformation:ValidateTemplate'
+                  - 'iam:PassRole'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 'codebuild:BatchGetBuilds'
+                  - 'codebuild:StartBuild'
+                Resource: '*'
+                Effect: Allow
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+  CFNDeployRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Policies:
+        - PolicyName: DeployAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action: '*'
+                Resource: '*'
+                Effect: Allow
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+Outputs:
+  SourceRepoURL:
+    Value: !GetAtt
+      - SourceRepository
+      - CloneUrlHttp
+  CodeBuildRoleArn:
+    Value: !GetAtt
+      - CodeBuildRole
+      - Arn
+  S3PipelineBucket:
+    Value: !Ref ArtifactBucketStore
+  CodePipelineRoleArn:
+    Value: !GetAtt
+      - CodePipelineRole
+      - Arn
+  CFNDeployRoleArn:
+    Value: !GetAtt
+      - CFNDeployRole
+      - Arn
