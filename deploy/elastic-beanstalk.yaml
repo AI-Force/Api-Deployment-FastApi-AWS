@@ -20,13 +20,13 @@ Parameters:
   SolutionStackName:
     Description: 'The name of the solution stack to base the environment on.'
     Type: String
-    Default: '64bit Amazon Linux 2 v3.4.4 running Docker'
-    AllowedValues: ['64bit Amazon Linux 2 v3.4.4 running Docker']
+    Default: '64bit Amazon Linux 2 v3.4.7 running Docker'
+    AllowedValues: ['64bit Amazon Linux 2 v3.4.7 running Docker']
   InstanceType:
     Description: 'The EC2 instance type of the application server.'
     Type: String
     Default: 'c5.large'
-    AllowedValues: ['c5.large', 'c5.xlarge', 'm5.large', 'm5.xlarge']
+    AllowedValues: ['t3.small', 't3.medium', 'm5.large', 'c5.large', 'c5.xlarge', 'm5.large', 'm5.xlarge']
   MinInstances:
     Description: 'The minimum number of instances to run.'
     Type: Number

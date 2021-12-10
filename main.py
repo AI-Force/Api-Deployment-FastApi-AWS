@@ -109,9 +109,10 @@ def load_model():
     """
     Loads the model prior to the first request.
     """
-    configure_logging()
-    logger.info('Loading models...')
-    app.state.model = ImageClassifier()
+    if not hasattr(app.state, 'model'):
+        configure_logging()
+        logger.info('Loading models...')
+        app.state.model = ImageClassifier()
 
 
 def configure_logging(logging_level=logging.INFO):
